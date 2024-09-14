@@ -1,6 +1,7 @@
+# what is this?
+it simulates a whiteboard
 
 # instructions
-
 action|key
 -|-
 draw black   | hold f or j
