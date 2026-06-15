@@ -6,7 +6,6 @@ import (
 	"math"
 
 	"github.com/hajimehoshi/ebiten/v2"
-	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/vector"
 )
 
@@ -56,17 +55,13 @@ func (a *app) Layout(_, _ int) (screenWidth int, screenHeight int) {
 
 func (a *app) Update() error {
 
-	check_any_drawing_input := func(checker func(ebiten.Key) bool) bool {
-		return drawWhite.check(checker) || drawBlack.check(checker)
-	}
-
-	is_drawing := check_any_drawing_input(ebiten.IsKeyPressed)
-	just_started_drawing := check_any_drawing_input(inpututil.IsKeyJustPressed)
+	is_drawing := drawWhite.isPressed() || drawBlack.isPressed()
+	just_started_drawing := drawWhite.isJustPressed() || drawBlack.isJustPressed()
 
 	var clr color.Color
-	if drawBlack.check(ebiten.IsKeyPressed) {
+	if drawBlack.isPressed() {
 		clr = color.Black
-	} else if drawWhite.check(ebiten.IsKeyPressed) {
+	} else if drawWhite.isPressed() {
 		clr = color.White
 	}
 
@@ -91,11 +86,11 @@ func (a *app) Update() error {
 		}
 	}
 
-	if resize.check(inpututil.IsKeyJustPressed) {
+	if resize.isJustPressed() {
 		a.sizeAnchorPos = cursorPosition()
 	}
 
-	if resize.check(ebiten.IsKeyPressed) {
+	if resize.isPressed() {
 		prevPos := a.sizeAnchorPos
 		currPos := cursorPosition()
 		reltivePos := Vec2{

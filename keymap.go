@@ -1,35 +1,76 @@
 package main
 
-import "github.com/hajimehoshi/ebiten/v2"
+import (
+	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
+)
 
 
-type keymap []ebiten.Key
+type keymap struct{
+	keys []ebiten.Key
+	mouseButtons []ebiten.MouseButton
+}
+
 var resize = keymap{
-    ebiten.KeyD,
-    ebiten.KeyK,
+    keys: []ebiten.Key{ebiten.KeyD, ebiten.KeyK,},
 }
 var drawBlack = keymap{
-    ebiten.KeyF,
-    ebiten.KeyJ,
+    keys: []ebiten.Key{ebiten.KeyF, ebiten.KeyJ,},
 }
 var drawWhite = keymap{
-    ebiten.KeyS,
-    ebiten.KeyL,
+    keys: []ebiten.Key{ebiten.KeyS, ebiten.KeyL,},
 }
 var undo = keymap{
-    ebiten.KeyZ,
-    ebiten.KeyU,
+    keys: []ebiten.Key{ebiten.KeyZ, ebiten.KeyU,},
 }
 var redo = keymap{
-    ebiten.KeyX,
-    ebiten.KeyR,
+    keys: []ebiten.Key{ebiten.KeyX, ebiten.KeyR,},
 }
 
-func (k keymap) check(checker func(ebiten.Key) bool) bool {
-    for _, key := range k {
-        if checker(key) {
-            return true
-        }
-    }
-    return false
+func (k keymap) isJustPressed() bool {
+	for _, key := range k.keys {
+		if inpututil.IsKeyJustPressed(key) {
+			return true
+		}
+	}
+
+	for _, mouseButton := range k.mouseButtons {
+		if inpututil.IsMouseButtonJustPressed(mouseButton) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (k keymap) isJustReleased() bool {
+	for _, key := range k.keys {
+		if inpututil.IsKeyJustReleased(key) {
+			return true
+		}
+	}
+
+	for _, mouseButton := range k.mouseButtons {
+		if inpututil.IsMouseButtonJustReleased(mouseButton) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (k keymap) isPressed() bool {
+	for _, key := range k.keys {
+		if ebiten.IsKeyPressed(key) {
+			return true
+		}
+	}
+
+	for _, mouseButton := range k.mouseButtons {
+		if ebiten.IsMouseButtonPressed(mouseButton) {
+			return true
+		}
+	}
+
+	return false
 }
