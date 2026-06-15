@@ -16,7 +16,7 @@ type appOption func(a *app)
 
 type app struct {
 	strokes []stroke
-	width float32
+	diameter float32
 	canvas *ebiten.Image
 	sizeAnchorPos Vec2
 	historyIndex uintptr
@@ -33,7 +33,7 @@ func (a *app) Draw(screen *ebiten.Image) {
 		screen,
 		cursor.x,
 		cursor.y,
-		a.width/2,
+		a.diameter/2,
 		3,
 		color.White,
 		true,
@@ -42,7 +42,7 @@ func (a *app) Draw(screen *ebiten.Image) {
 		screen,
 		cursor.x,
 		cursor.y,
-		a.width/2,
+		a.diameter/2,
 		1,
 		color.Black,
 		true,
@@ -71,7 +71,7 @@ func (a *app) Update() error {
 		}
 		a.strokes = append(a.strokes, stroke{
 			points: []Vec2{},
-			width:  a.width,
+			width:  a.diameter,
 			color:  clr,
 		})
 	}
@@ -100,7 +100,7 @@ func (a *app) Update() error {
 		length := float32(math.Sqrt(
 			float64(reltivePos.x) * float64(reltivePos.x) + float64(reltivePos.y) * float64(reltivePos.y),
 		))
-		a.width = length * 2.0
+		a.diameter = length * 2.0
 	}
 
 	return nil
@@ -120,7 +120,7 @@ func main() {
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 	ebiten.CursorPosition()
 	whiteboardApp := newApp( func(a *app) {
-		a.width = 10
+		a.diameter = 10
 		a.canvas = ebiten.NewImage(width, height)
 		a.canvas.Fill(color.White)
 	})
