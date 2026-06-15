@@ -12,13 +12,16 @@ type keymap struct{
 }
 
 var resize = keymap{
-    keys: []ebiten.Key{ebiten.KeyD, ebiten.KeyK,},
+	keys: []ebiten.Key{ebiten.KeyD, ebiten.KeyK,},
+	mouseButtons: []ebiten.MouseButton{ebiten.MouseButtonMiddle,},
 }
 var drawBlack = keymap{
-    keys: []ebiten.Key{ebiten.KeyF, ebiten.KeyJ,},
+	keys: []ebiten.Key{ebiten.KeyF, ebiten.KeyJ,},
+	mouseButtons: []ebiten.MouseButton{ebiten.MouseButtonLeft,},
 }
 var drawWhite = keymap{
-    keys: []ebiten.Key{ebiten.KeyS, ebiten.KeyL,},
+	keys: []ebiten.Key{ebiten.KeyS, ebiten.KeyL,},
+	mouseButtons: []ebiten.MouseButton{ebiten.MouseButtonRight,},
 }
 var undo = keymap{
     keys: []ebiten.Key{ebiten.KeyZ, ebiten.KeyU,},
