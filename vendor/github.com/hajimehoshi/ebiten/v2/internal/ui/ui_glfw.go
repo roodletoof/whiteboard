@@ -24,8 +24,10 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/hajimehoshi/ebiten/v2/internal/clock"
 	"github.com/hajimehoshi/ebiten/v2/internal/file"
 	"github.com/hajimehoshi/ebiten/v2/internal/gamepad"
 	"github.com/hajimehoshi/ebiten/v2/internal/glfw"
@@ -69,7 +71,7 @@ type userInterfaceImpl struct {
 
 	lastDeviceScaleFactor float64
 
-	initMonitor                *Monitor
+	initMonitor                atomic.Pointer[Monitor]
 	initFullscreen             bool
 	initCursorMode             CursorMode
 	initWindowDecorated        bool
@@ -80,6 +82,8 @@ type userInterfaceImpl struct {
 	initWindowFloating         bool
 	initWindowMaximized        bool
 	initWindowMousePassthrough bool
+
+	initUnfocused bool
 
 	// bufferOnceSwapped must be accessed from the main thread.
 	bufferOnceSwapped bool
@@ -96,16 +100,21 @@ type userInterfaceImpl struct {
 	savedCursorX float64
 	savedCursorY float64
 
-	sizeCallback                   glfw.SizeCallback
 	closeCallback                  glfw.CloseCallback
 	framebufferSizeCallback        glfw.FramebufferSizeCallback
 	defaultFramebufferSizeCallback glfw.FramebufferSizeCallback
 	dropCallback                   glfw.DropCallback
 	framebufferSizeCallbackCh      chan struct{}
 
+	cachedCurrentMonitor     *Monitor
+	cachedCurrentMonitorTime int64
+
 	darwinInitOnce        sync.Once
 	showWindowOnce        sync.Once
 	bufferOnceSwappedOnce sync.Once
+
+	// immContext is used only in Windows.
+	immContext uintptr
 
 	m sync.RWMutex
 }
@@ -246,15 +255,11 @@ func (u *UserInterface) initializeGLFW() error {
 }
 
 func (u *UserInterface) setInitMonitor(m *Monitor) {
-	u.m.Lock()
-	defer u.m.Unlock()
-	u.initMonitor = m
+	u.initMonitor.Store(m)
 }
 
 func (u *UserInterface) getInitMonitor() *Monitor {
-	u.m.RLock()
-	defer u.m.RUnlock()
-	return u.initMonitor
+	return u.initMonitor.Load()
 }
 
 // AppendMonitors appends the current monitors to the passed in mons slice and returns it.
@@ -569,6 +574,22 @@ func (u *UserInterface) setWindowClosingHandled(handled bool) {
 	u.m.Lock()
 	u.windowClosingHandled = handled
 	u.m.Unlock()
+
+	if !u.isRunning() {
+		return
+	}
+	if u.isTerminated() {
+		return
+	}
+	u.mainThread.Call(func() {
+		if u.isTerminated() {
+			return
+		}
+		if err := u.setDocumentEdited(handled); err != nil {
+			u.setError(err)
+			return
+		}
+	})
 }
 
 // isFullscreen must be called from the main thread.
@@ -822,6 +843,8 @@ func (u *UserInterface) createWindow() error {
 		return err
 	}
 	u.window = window
+	// Set the running state true just a window is set (#2742).
+	u.setRunning(true)
 
 	// The position must be set before the size is set (#1982).
 	// setWindowSizeInDIP refers the current monitor's device scale.
@@ -870,6 +893,17 @@ func (u *UserInterface) createWindow() error {
 	// Icons are set after every frame. They don't have to be cared here.
 
 	if err := u.updateWindowSizeLimits(); err != nil {
+		return err
+	}
+
+	u.m.Lock()
+	closingHandled := u.windowClosingHandled
+	u.m.Unlock()
+	if err := u.setDocumentEdited(closingHandled); err != nil {
+		return err
+	}
+
+	if err := u.afterWindowCreation(); err != nil {
 		return err
 	}
 
@@ -1020,6 +1054,8 @@ event:
 }
 
 func (u *UserInterface) initOnMainThread(options *RunOptions) error {
+	u.setApplePressAndHoldEnabled(options.ApplePressAndHoldEnabled)
+
 	if err := glfw.WindowHint(glfw.AutoIconify, glfw.False); err != nil {
 		return err
 	}
@@ -1058,6 +1094,7 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 
 	g, lib, err := newGraphicsDriver(&graphicsDriverCreatorImpl{
 		transparent: options.ScreenTransparent,
+		colorSpace:  options.ColorSpace,
 	}, options.GraphicsLibrary)
 	if err != nil {
 		return err
@@ -1087,6 +1124,7 @@ func (u *UserInterface) initOnMainThread(options *RunOptions) error {
 		return err
 	}
 
+	u.initUnfocused = options.InitUnfocused
 	focused := glfw.True
 	if options.InitUnfocused {
 		focused = glfw.False
@@ -1288,8 +1326,10 @@ func (u *UserInterface) update() (float64, float64, error) {
 			if err = u.window.Show(); err != nil {
 				return
 			}
-			if err = u.window.Focus(); err != nil {
-				return
+			if !u.initUnfocused {
+				if err = u.window.Focus(); err != nil {
+					return
+				}
 			}
 
 			if runtime.GOOS == "darwin" || runtime.GOOS == "windows" {
@@ -1351,7 +1391,9 @@ func (u *UserInterface) update() (float64, float64, error) {
 		}
 	}
 
-	for !u.isRunnableOnUnfocused() {
+	// If isRunnableOnUnfocused is false and the window is not focused, wait here.
+	// For the first update, skip this check as the window might not be seen yet in some environments like ChromeOS (#3091).
+	for !u.isRunnableOnUnfocused() && u.bufferOnceSwapped {
 		// In the initial state on macOS, the window is not shown (#2620).
 		visible, err := u.window.GetAttrib(glfw.Visible)
 		if err != nil {
@@ -1830,6 +1872,21 @@ func (u *UserInterface) minimumWindowWidth() (int, error) {
 //
 // currentMonitor must be called on the main thread.
 func (u *UserInterface) currentMonitor() (*Monitor, error) {
+	if u.cachedCurrentMonitor != nil && u.cachedCurrentMonitorTime > u.Tick()-int64(clock.TPS()) && theMonitors.contains(u.cachedCurrentMonitor) {
+		return u.cachedCurrentMonitor, nil
+	}
+
+	m, err := u.currentMonitorImpl()
+	if err != nil {
+		return nil, err
+	}
+	u.cachedCurrentMonitor = m
+	u.cachedCurrentMonitorTime = u.Tick()
+	return m, nil
+}
+
+// currentMonitorImpl must be called from the main thread.
+func (u *UserInterface) currentMonitorImpl() (*Monitor, error) {
 	if u.window == nil {
 		return u.getInitMonitor(), nil
 	}
@@ -1863,7 +1920,13 @@ func (u *UserInterface) currentMonitor() (*Monitor, error) {
 		return m, nil
 	}
 
-	return theMonitors.primaryMonitor(), nil
+	if m := theMonitors.primaryMonitor(); m != nil {
+		return m, nil
+	}
+
+	// The primiary monitor might be missing even after the initialization (#3094, #3241).
+	// The reason is still unknown. As a workaround, return the initial monitor.
+	return u.getInitMonitor(), nil
 }
 
 func (u *UserInterface) readInputState(inputState *InputState) {
@@ -2074,7 +2137,12 @@ func (u *UserInterface) setWindowPositionInDIP(x, y int, monitor *Monitor) error
 	s := monitor.DeviceScaleFactor()
 	xf := dipToGLFWPixel(float64(x), s)
 	yf := dipToGLFWPixel(float64(y), s)
-	if x, y := u.adjustWindowPosition(mx+int(xf), my+int(yf), monitor); f {
+
+	x, y, err = u.adjustWindowPosition(mx+int(xf), my+int(yf), monitor)
+	if err != nil {
+		return err
+	}
+	if f {
 		u.setOrigWindowPos(x, y)
 	} else {
 		if err := u.window.SetPos(x, y); err != nil {

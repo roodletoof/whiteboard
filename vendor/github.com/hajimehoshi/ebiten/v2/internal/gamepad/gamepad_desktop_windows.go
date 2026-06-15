@@ -113,7 +113,7 @@ type nativeGamepadsDesktop struct {
 	enumObjectsCallback uintptr
 
 	nativeWindow  windows.HWND
-	deviceChanged int32
+	deviceChanged atomic.Bool
 	err           error
 }
 
@@ -309,12 +309,16 @@ func (g *nativeGamepadsDesktop) dinput8EnumDevicesCallback(lpddi *_DIDEVICEINSTA
 		return _DIENUM_STOP
 	}
 
-	// lpddi.guidInstance is not relialable as a unique identity when the same multiple devices are connected (#3046).
+	// lpddi.guidInstance is not reliable as a unique identity when the same multiple devices are connected (#3046).
 	// Use HID Path instead.
 	getDInputPath := func(device *_IDirectInputDevice8W) (string, error) {
-		var prop _DIPROPGUIDANDPATH
-		prop.diph.dwHeaderSize = uint32(unsafe.Sizeof(_DIPROPHEADER{}))
-		prop.diph.dwSize = uint32(unsafe.Sizeof(_DIPROPGUIDANDPATH{}))
+		prop := _DIPROPGUIDANDPATH{
+			diph: _DIPROPHEADER{
+				dwHeaderSize: uint32(unsafe.Sizeof(_DIPROPHEADER{})),
+				dwSize:       uint32(unsafe.Sizeof(_DIPROPGUIDANDPATH{})),
+				dwHow:        _DIPH_DEVICE,
+			},
+		}
 		if err := device.GetProperty(_DIPROP_GUIDANDPATH, &prop.diph); err != nil {
 			return "", err
 		}
@@ -572,11 +576,11 @@ func (g *nativeGamepadsDesktop) update(gamepads *gamepads) error {
 		g.origWndProc = h
 	}
 
-	if atomic.LoadInt32(&g.deviceChanged) != 0 {
+	if g.deviceChanged.Load() {
 		if err := g.detectConnection(gamepads); err != nil {
 			g.err = err
 		}
-		atomic.StoreInt32(&g.deviceChanged, 0)
+		g.deviceChanged.Store(false)
 	}
 
 	return nil
@@ -585,7 +589,7 @@ func (g *nativeGamepadsDesktop) update(gamepads *gamepads) error {
 func (g *nativeGamepadsDesktop) wndProc(hWnd uintptr, uMsg uint32, wParam, lParam uintptr) uintptr {
 	switch uMsg {
 	case _WM_DEVICECHANGE:
-		atomic.StoreInt32(&g.deviceChanged, 1)
+		g.deviceChanged.Store(true)
 	}
 	return _CallWindowProcW(g.origWndProc, hWnd, uMsg, wParam, lParam)
 }
@@ -829,6 +833,16 @@ func (g *nativeGamepadDesktop) hatState(hat int) int {
 	if g.xinputState.Gamepad.wButtons&_XINPUT_GAMEPAD_DPAD_LEFT != 0 {
 		v |= hatLeft
 	}
+
+	// Treat invalid combinations as neither being pressed
+	// while preserving what data can be preserved
+	if (v&hatRight) != 0 && (v&hatLeft) != 0 {
+		v &^= hatRight | hatLeft
+	}
+	if (v&hatUp) != 0 && (v&hatDown) != 0 {
+		v &^= hatUp | hatDown
+	}
+
 	return v
 }
 
